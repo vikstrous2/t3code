@@ -358,6 +358,32 @@ describe("applyThreadDetailEvent", () => {
       },
     );
 
+    it("follows the worktree pool leasing and parking a thread", () => {
+      const parked = applyThreadDetailEvent(
+        { ...baseThread, worktreePath: "/pool/slot-1", worktreePool: { state: "leased" } },
+        {
+          ...baseEventFields,
+          sequence: 5,
+          occurredAt: "2026-04-01T05:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: baseThread.id,
+          type: "thread.meta-updated",
+          payload: {
+            threadId: baseThread.id,
+            worktreePath: null,
+            worktreePool: { state: "parked" },
+            updatedAt: baseThread.updatedAt,
+          },
+        },
+      );
+      expect(parked.kind).toBe("updated");
+      if (parked.kind === "updated") {
+        expect(parked.thread.worktreePath).toBeNull();
+        expect(parked.thread.worktreePool).toEqual({ state: "parked" });
+        expect(parked.thread.updatedAt).toBe(baseThread.updatedAt);
+      }
+    });
+
     it("patches title and branch", () => {
       const result = applyThreadDetailEvent(
         { ...baseThread, activeOrderKey: "m" },

@@ -35,6 +35,10 @@ import {
   projectScriptRuntimeEnv,
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
+import {
+  isThreadWorkspaceParked,
+  PARKED_WORKTREE_DESCRIPTION,
+} from "@t3tools/shared/threadWorkspace";
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
@@ -704,6 +708,13 @@ function ThreadRouteContent(
           scriptId: script.id,
           reason: "no-thread-or-workspace",
         });
+        return;
+      }
+
+      if (isThreadWorkspaceParked(selectedThread)) {
+        // The script's T3CODE_WORKTREE_PATH is built here, and a parked
+        // pooled thread has no checkout until something leases one.
+        Alert.alert("Checkout parked", PARKED_WORKTREE_DESCRIPTION);
         return;
       }
 

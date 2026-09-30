@@ -49,6 +49,16 @@ describe("getOrphanedWorktreePathForThread", () => {
     expect(result).toBeNull();
   });
 
+  it("never offers to delete a worktree-pool checkout", () => {
+    const threads = [
+      makeThread({
+        worktreePath: "/home/me/.t3/pool/repo/slot-1",
+        worktreePool: { state: "leased" },
+      }),
+    ];
+    expect(getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"))).toBeNull();
+  });
+
   it("returns the path when no other thread links to that worktree", () => {
     const threads = [makeThread({ worktreePath: "/tmp/repo/worktrees/feature-a" })];
     const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));

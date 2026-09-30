@@ -2,11 +2,13 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
   type ProviderInstanceId,
+  type WorktreePool,
   type WorktreeSubmodules,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
@@ -22,6 +24,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { runtimeModeConfig, runtimeModeOptions } from "../chat/runtimeModeConfig";
 import { PULL_REQUEST_MERGE_METHOD_LABELS } from "../pullRequest/pullRequestDetail.logic";
 import { TraitsPicker } from "../chat/TraitsPicker";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
@@ -40,6 +43,12 @@ import {
   useScopedSettingSource,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
+import {
+  parseWorktreePoolMaxTrees,
+  WORKTREE_POOL_DEFAULT_TREES,
+  WORKTREE_POOL_MAX_TREES,
+  WORKTREE_POOL_MIN_TREES,
+} from "./worktreePoolSetting";
 
 /**
  * Rows for the settings a project may override. The same rows edit
@@ -49,6 +58,75 @@ import {
 const WORKTREE_SUBMODULES_OPTIONS = ["recursive", "top-level", "none"] as const;
 function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules {
   return value !== null && (WORKTREE_SUBMODULES_OPTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Off / On plus the pool's checkout cap. The cap is a local draft that
+ * commits on blur or Enter, so typing "16" does not write a pool of 1 first.
+ */
+function WorktreePoolControl({
+  value,
+  label,
+  onChange,
+}: {
+  /** Null when the targets disagree or none is connected; `label` names why. */
+  value: WorktreePool | null;
+  label: string;
+  onChange: (value: WorktreePool) => void;
+}) {
+  const maxTrees = typeof value === "object" && value !== null ? value.maxTrees : null;
+  // The draft belongs to the cap it was typed against; a new persisted cap
+  // (another device, a reset) replaces it instead of an effect syncing it.
+  const [draft, setDraft] = useState<{ base: number | null; text: string } | null>(null);
+  const text = draft !== null && draft.base === maxTrees ? draft.text : String(maxTrees ?? "");
+  const commit = () => {
+    setDraft(null);
+    const parsed = parseWorktreePoolMaxTrees(text);
+    if (parsed !== null && parsed !== maxTrees) onChange({ maxTrees: parsed });
+  };
+
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      {maxTrees !== null ? (
+        <div className="w-16">
+          <Input
+            size="sm"
+            type="number"
+            min={WORKTREE_POOL_MIN_TREES}
+            max={WORKTREE_POOL_MAX_TREES}
+            value={text}
+            aria-label="Max checkouts"
+            title="Max checkouts"
+            onChange={(event) => setDraft({ base: maxTrees, text: event.target.value })}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commit();
+            }}
+          />
+        </div>
+      ) : null}
+      <Select
+        value={value === null ? null : value === "off" ? "off" : "on"}
+        onValueChange={(next) => {
+          if (next === "off") onChange("off");
+          else if (next === "on" && maxTrees === null)
+            onChange({ maxTrees: WORKTREE_POOL_DEFAULT_TREES });
+        }}
+      >
+        <SelectTrigger size="sm" aria-label="Worktree pool">
+          <SelectValue>
+            {(selected: string | null) =>
+              selected === "off" ? "Off" : selected === "on" ? "On" : label
+            }
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="end" alignItemWithTrigger={false}>
+          <SelectItem value="off">Off</SelectItem>
+          <SelectItem value="on">On</SelectItem>
+        </SelectPopup>
+      </Select>
+    </div>
+  );
 }
 
 export function ProjectDefaultsSettings({ category }: { category: ProjectSettingsCategory }) {
@@ -77,6 +155,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
   const mixedSubmodules = useScopedSettingsMixed(["worktreeSubmodules"]);
+  const mixedPool = useScopedSettingsMixed(["worktreePool"]);
   const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
@@ -378,6 +457,32 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                   ))}
                 </SelectPopup>
               </Select>
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["worktreePool"]}
+            mixed={mixedPool}
+            {...searchableSetting("worktree-pool")}
+            description={
+              isProjectScope
+                ? "Share a fixed set of checkouts across this project's new worktree threads."
+                : "Share a fixed set of checkouts across new worktree threads so build caches keyed on the checkout path (such as Bazel's) stay warm. Projects and their t3.json can override it."
+            }
+            resetAction={
+              !isProjectScope && settings.worktreePool !== null ? (
+                <SettingResetButton
+                  label="worktree pool"
+                  onClick={() => updateSettings({ worktreePool: null })}
+                />
+              ) : null
+            }
+            control={
+              <WorktreePoolControl
+                value={mixedPool ? null : (effective?.worktreePool ?? null)}
+                label={unavailable ? "Unavailable" : "Mixed"}
+                onChange={(value) => updateSettings({ worktreePool: value })}
+              />
             }
           />
         </>

@@ -14,6 +14,11 @@ import {
   visibleThreadPullRequests,
   type ThreadPullRequestBadge,
 } from "@t3tools/shared/threadPullRequests";
+import {
+  PARKED_WORKTREE_DESCRIPTION,
+  PARKED_WORKTREE_LABEL,
+  threadWorkspaceState,
+} from "@t3tools/shared/threadWorkspace";
 import { FolderGit2Icon, TerminalIcon } from "lucide-react";
 import { useRender } from "@base-ui/react/use-render";
 import { useMemo, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
@@ -411,17 +416,21 @@ export function synchronizeTerminalPulse(event: AnimationEvent<SVGSVGElement>) {
 export function ThreadWorktreeIndicator({
   thread,
 }: {
-  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath" | "worktreePool">;
 }) {
-  const worktreePath = thread.worktreePath?.trim();
-  if (!worktreePath) {
+  const workspace = threadWorkspaceState({
+    worktreePath: thread.worktreePath?.trim() || null,
+    worktreePool: thread.worktreePool,
+  });
+  if (workspace.kind === "local") {
     return null;
   }
 
-  const displayPath = formatWorktreePathForDisplay(worktreePath);
-  const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+  const branchSuffix = thread.branch ? ` (${thread.branch})` : "";
+  const tooltip =
+    workspace.kind === "pooled-parked"
+      ? `${PARKED_WORKTREE_LABEL}${branchSuffix}. ${PARKED_WORKTREE_DESCRIPTION}`
+      : `${workspace.kind === "pooled-leased" ? "Pooled worktree" : "Worktree"}: ${formatWorktreePathForDisplay(workspace.path)}${branchSuffix}`;
 
   return (
     <Tooltip>

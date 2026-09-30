@@ -1,6 +1,12 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
+  isPooledThread,
+  PARKED_WORKTREE_DESCRIPTION,
+  threadWorkspaceState,
+  type ThreadWorkspaceState,
+} from "@t3tools/shared/threadWorkspace";
+import {
   ChevronDownIcon,
   FolderGit2Icon,
   FolderGitIcon,
@@ -103,6 +109,7 @@ interface MobileRunContextSelectorProps {
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
+  workspaceKind: ThreadWorkspaceState["kind"] | null;
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel: string | null;
   previousWorktreeBranch: string | null;
@@ -122,6 +129,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   onEnvironmentChange,
   effectiveEnvMode,
   activeWorktreePath,
+  workspaceKind,
   onEnvModeChange,
   previousWorktreeLabel,
   previousWorktreeBranch,
@@ -141,7 +149,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   const workspaceLabel = forceNewWorktree
     ? resolveEnvModeLabel("worktree")
     : envModeLocked
-      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
+      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode, workspaceKind)
       : effectiveEnvMode === "worktree"
         ? resolveEnvModeLabel("worktree")
         : resolveCurrentWorkspaceLabel(activeWorktreePath);
@@ -151,7 +159,9 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
       <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
         <WorkspaceIcon className={cn("size-3 shrink-0", showEnvironmentIndicator && "mx-0!")} />
       </TooltipTrigger>
-      <TooltipPopup>{workspaceLabel}</TooltipPopup>
+      <TooltipPopup>
+        {workspaceKind === "pooled-parked" ? PARKED_WORKTREE_DESCRIPTION : workspaceLabel}
+      </TooltipPopup>
     </Tooltip>
   );
   const icon = showEnvironmentIndicator ? (
@@ -547,7 +557,10 @@ export const BranchToolbar = memo(function BranchToolbar({
     ? null
     : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
   const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
-  const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  const workspaceKind = serverThread ? threadWorkspaceState(serverThread).kind : null;
+  const envModeLocked =
+    envLocked ||
+    (serverThread !== null && (activeWorktreePath !== null || isPooledThread(serverThread)));
 
   // "Previous worktree" hops a draft into the most recently active worktree
   // of this project — the "keep going where I just was" follow-up flow. Only
@@ -644,6 +657,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onEnvironmentChange={onEnvironmentChange}
             effectiveEnvMode={effectiveEnvMode}
             activeWorktreePath={activeWorktreePath}
+            workspaceKind={workspaceKind}
             onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
@@ -684,6 +698,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}
+              workspaceKind={workspaceKind}
               onEnvModeChange={onEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}

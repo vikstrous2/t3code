@@ -9,6 +9,10 @@ import {
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
 import {
+  isThreadWorkspaceParked,
+  PARKED_WORKTREE_CHANGES_MESSAGE,
+} from "@t3tools/shared/threadWorkspace";
+import {
   ArrowRightIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -164,10 +168,16 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
-  const activeRepositoryRoot = activeThread?.worktreePath
+  // A parked pooled thread has no checkout: turn diffs come from checkpoint
+  // refs and still load, but working-tree and branch diffs have nothing to read.
+  const activeThreadParked = activeThread != null && isThreadWorkspaceParked(activeThread);
+  const activeCwd = activeThreadParked
     ? undefined
-    : activeProject?.repositoryIdentity?.rootPath;
+    : (activeThread?.worktreePath ?? activeProject?.workspaceRoot);
+  const activeRepositoryRoot =
+    activeThread?.worktreePath || activeThreadParked
+      ? undefined
+      : activeProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -983,6 +993,10 @@ export default function DiffPanel({
       ) : !isGitRepo ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
+        </div>
+      ) : selectedTurnId === null && activeThreadParked ? (
+        <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
+          {PARKED_WORKTREE_CHANGES_MESSAGE}
         </div>
       ) : selectedTurnId !== null && orderedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">

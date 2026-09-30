@@ -417,6 +417,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["git submodule init recursive top-level none worktree t3.json"],
   },
   {
+    id: "worktree-pool",
+    title: "Worktree pool",
+    to: "/settings/general",
+    scope: "project-defaults",
+    searchTerms: ["shared checkouts pool bazel build cache warm max trees worktree t3.json"],
+  },
+  {
     id: "start-from-origin",
     title: "Start from origin",
     to: "/settings/general",

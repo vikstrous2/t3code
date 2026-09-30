@@ -19,6 +19,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ProjectOverrideEntry, ScopedSettingsTarget } from "./scopedSettings";
 import { isProjectScopedSettingKey } from "./scopedSettings";
+import { formatWorktreePool } from "./worktreePoolSetting";
 
 interface InheritanceLayer {
   readonly key: "project" | "environment" | "t3.json" | "built-in";
@@ -45,7 +46,9 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
           ? "Automatic"
           : key === "sourceControlWriterModelSelection"
             ? "Text generation model"
-            : key === "defaultThreadEnvMode" || key === "worktreeSubmodules"
+            : key === "defaultThreadEnvMode" ||
+                key === "worktreeSubmodules" ||
+                key === "worktreePool"
               ? "Inherit"
               : "Not set";
   }
@@ -54,6 +57,12 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
     return key === "sidebarAutoSettleAfterDays"
       ? `${value} ${value === 1 ? "day" : "days"}`
       : String(value);
+  }
+  if (key === "worktreePool") {
+    if (value === "off") return formatWorktreePool(value);
+    if (typeof value === "object" && "maxTrees" in value && typeof value.maxTrees === "number") {
+      return formatWorktreePool({ maxTrees: value.maxTrees });
+    }
   }
   if (typeof value === "string") {
     if (key === "defaultThreadEnvMode" && (value === "local" || value === "worktree")) {

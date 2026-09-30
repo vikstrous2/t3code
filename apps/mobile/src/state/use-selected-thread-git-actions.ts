@@ -25,6 +25,7 @@ import { useAtomCommand } from "./use-atom-command";
 import { showGitActionResult } from "./use-vcs-action-state";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
+import { PARKED_WORKTREE_DESCRIPTION } from "@t3tools/shared/threadWorkspace";
 
 export function useSelectedThreadGitActions() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -36,7 +37,9 @@ export function useSelectedThreadGitActions() {
   const createWorktree = useAtomCommand(vcsEnvironment.createWorktree, { reportFailure: false });
   const pull = useAtomCommand(vcsEnvironment.pull, { reportFailure: false });
   const { selectedThread, selectedThreadProject } = useThreadSelection();
-  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
+  const { selectedThreadCwd, selectedThreadWorktreePath, selectedThreadWorkspace } =
+    useSelectedThreadWorktree();
+  const selectedThreadWorkspaceKind = selectedThreadWorkspace.kind;
   const runStackedAction = useAtomCommand(
     vcsActionManager.runStackedAction({
       environmentId: selectedThread?.environmentId ?? null,
@@ -133,6 +136,15 @@ export function useSelectedThreadGitActions() {
       }) => Promise<AtomCommandResult<T, E>>,
       options?: { readonly managedExternally?: boolean },
     ): Promise<T | null> => {
+      if (selectedThread && selectedThreadWorkspaceKind === "pooled-parked") {
+        // Git actions run in the thread's checkout; a parked one has none.
+        showGitActionResult({
+          type: "error",
+          title: "Checkout parked",
+          description: PARKED_WORKTREE_DESCRIPTION,
+        });
+        return null;
+      }
       if (!selectedThread || !selectedThreadProject || !selectedThreadCwd) {
         return null;
       }
@@ -161,7 +173,7 @@ export function useSelectedThreadGitActions() {
       }
       return result.value;
     },
-    [selectedThread, selectedThreadCwd, selectedThreadProject],
+    [selectedThread, selectedThreadCwd, selectedThreadProject, selectedThreadWorkspaceKind],
   );
 
   const refreshSelectedThreadBranches = useCallback(async (): Promise<ReadonlyArray<VcsRef>> => {
@@ -261,6 +273,18 @@ export function useSelectedThreadGitActions() {
 
   const onCreateSelectedThreadWorktree = useCallback(
     async (nextWorktree: { readonly baseBranch: string; readonly newBranch: string }) => {
+      // A pooled thread stays bound to its pool checkout.
+      if (
+        selectedThreadWorkspaceKind === "pooled-leased" ||
+        selectedThreadWorkspaceKind === "pooled-parked"
+      ) {
+        showGitActionResult({
+          type: "error",
+          title: "Worktree pool",
+          description: "This thread uses the project's worktree pool. Start a new thread instead.",
+        });
+        return;
+      }
       await runSelectedThreadGitMutation(
         "create_worktree",
         "Creating worktree",
@@ -289,7 +313,12 @@ export function useSelectedThreadGitActions() {
         },
       );
     },
-    [createWorktree, runSelectedThreadGitMutation, syncSelectedThreadBranchState],
+    [
+      createWorktree,
+      runSelectedThreadGitMutation,
+      selectedThreadWorkspaceKind,
+      syncSelectedThreadBranchState,
+    ],
   );
 
   const onPullSelectedThreadBranch = useCallback(async () => {

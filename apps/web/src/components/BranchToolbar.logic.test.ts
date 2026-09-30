@@ -507,6 +507,17 @@ describe("resolveEffectiveEnvMode", () => {
       }),
     ).toBe("local");
   });
+
+  it("keeps a parked pooled thread in worktree mode although it has no path", () => {
+    expect(
+      resolveEffectiveEnvMode({
+        activeWorktreePath: null,
+        hasServerThread: true,
+        draftThreadEnvMode: undefined,
+        pooled: true,
+      }),
+    ).toBe("worktree");
+  });
 });
 
 describe("resolveEnvModeLabel", () => {
@@ -539,6 +550,15 @@ describe("resolveLockedWorkspaceLabel", () => {
 
   it("describes a worktree that is still being created as a new worktree", () => {
     expect(resolveLockedWorkspaceLabel(null, "worktree")).toBe("New worktree");
+  });
+
+  it("labels pooled threads by their pool state rather than their path", () => {
+    expect(resolveLockedWorkspaceLabel(null, "worktree", "pooled-parked")).toBe(
+      "Worktree · parked",
+    );
+    expect(resolveLockedWorkspaceLabel("/pool/slot-1", "worktree", "pooled-leased")).toBe(
+      "Pooled worktree",
+    );
   });
 });
 
@@ -732,6 +752,27 @@ describe("resolveBranchSelectionTarget", () => {
       nextWorktreePath: "/repo/.t3/worktrees/feature-a",
       reuseExistingWorktree: false,
     });
+  });
+
+  it("keeps a pooled thread in its pool checkout for any ref", () => {
+    for (const refName of [
+      { isDefault: false, worktreePath: "/repo/.t3/worktrees/feature-b" },
+      { isDefault: true, worktreePath: "/repo" },
+      { isDefault: true, worktreePath: null },
+    ]) {
+      expect(
+        resolveBranchSelectionTarget({
+          activeProjectCwd: "/repo",
+          activeWorktreePath: "/pool/slot-1",
+          refName,
+          pooled: true,
+        }),
+      ).toEqual({
+        checkoutCwd: "/pool/slot-1",
+        nextWorktreePath: "/pool/slot-1",
+        reuseExistingWorktree: false,
+      });
+    }
   });
 });
 

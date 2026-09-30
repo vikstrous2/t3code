@@ -8,6 +8,7 @@ import {
   type ServerSettings,
   type ServerSettingsPatch,
   type ThreadEnvMode,
+  type WorktreePool,
   type WorktreeSubmodules,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   type ProjectScopedServerSettingKey,
@@ -46,7 +47,12 @@ const PAGE_TITLES: Record<SettingsPage, string> = {
 };
 
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
-  "new-threads": ["defaultThreadEnvMode", "worktreeSubmodules", "defaultRuntimeMode"],
+  "new-threads": [
+    "defaultThreadEnvMode",
+    "worktreeSubmodules",
+    "worktreePool",
+    "defaultRuntimeMode",
+  ],
   "source-control": ["defaultAutoPull", "newWorktreesStartFromOrigin"],
   "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess"],
   maintenance: ["continueThreadsAfterServerUpdate"],
@@ -71,6 +77,43 @@ const SUBMODULE_CHOICES: ReadonlyArray<{
   },
   { mode: "none", label: "Skip", description: "Leave submodules empty for a setup script." },
 ];
+
+// Pool values are objects, so targets compare by this key instead of identity.
+function worktreePoolKey(value: WorktreePool | null): string {
+  return value === null ? "inherit" : value === "off" ? "off" : String(value.maxTrees);
+}
+
+const POOL_PRESET_TREES = [4, 8, 16] as const;
+
+/**
+ * Inherit (environment scope only), Off and a few pool sizes. A size set
+ * elsewhere, such as the web settings' free-form field, gets its own row so
+ * the selection still shows.
+ */
+function worktreePoolChoices(current: WorktreePool | null): ReadonlyArray<{
+  readonly value: WorktreePool | null;
+  readonly label: string;
+  readonly description: string;
+}> {
+  const sizes: number[] = [...POOL_PRESET_TREES];
+  if (typeof current === "object" && current !== null && !sizes.includes(current.maxTrees)) {
+    sizes.push(current.maxTrees);
+    sizes.sort((left, right) => left - right);
+  }
+  return [
+    {
+      value: null,
+      label: "Inherit",
+      description: "Use the repository's t3.json, or give each thread its own worktree.",
+    },
+    { value: "off", label: "Off", description: "Give each new worktree thread its own checkout." },
+    ...sizes.map((maxTrees) => ({
+      value: { maxTrees },
+      label: `Pool of ${maxTrees}`,
+      description: `Share up to ${maxTrees} checkouts so path-keyed build caches stay warm.`,
+    })),
+  ];
+}
 
 const WORKSPACE_CHOICES: ReadonlyArray<{
   readonly mode: ThreadEnvMode | null;
@@ -160,6 +203,13 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
+  const poolMixed =
+    reference === null ||
+    displayTargets.some(
+      (entry) =>
+        worktreePoolKey(entry.settings.worktreePool) !==
+        worktreePoolKey(reference.settings.worktreePool),
+    );
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "environment settings update",
     reportFailure: true,
@@ -299,6 +349,34 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                         onPress={() => write({ worktreeSubmodules: choice.mode })}
                       />
                     ))}
+                  </SettingsSection>
+                  <SettingsSection
+                    title="Worktree pool"
+                    trailing={
+                      pendingWrites === 0 && poolMixed ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {worktreePoolChoices(
+                      poolMixed ? null : (reference?.settings.worktreePool ?? null),
+                    )
+                      .filter((choice) => choice.value !== null || !projectSelected)
+                      .map((choice, index) => (
+                        <ChoiceRow
+                          key={worktreePoolKey(choice.value)}
+                          label={choice.label}
+                          description={choice.description}
+                          selected={
+                            !poolMixed &&
+                            worktreePoolKey(reference?.settings.worktreePool ?? null) ===
+                              worktreePoolKey(choice.value)
+                          }
+                          separated={index > 0}
+                          disabled={disabledFor("worktreePool")}
+                          onPress={() => write({ worktreePool: choice.value })}
+                        />
+                      ))}
                   </SettingsSection>
                   <SettingsSection
                     title="Default permissions"

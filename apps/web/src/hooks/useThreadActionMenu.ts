@@ -8,6 +8,11 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  branchCarryOverWorkspace,
+  missingWorkspacePathReason,
+  threadWorkspaceCwd,
+} from "@t3tools/shared/threadWorkspace";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
@@ -203,8 +208,7 @@ export function useThreadActionMenu(input: {
             const result = await settlePromise(() =>
               handleNewThread(scopeProjectRef(threadRef.environmentId, thread.projectId), {
                 branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
+                ...branchCarryOverWorkspace(thread),
                 startFromOrigin: false,
               }),
             );
@@ -251,13 +255,13 @@ export function useThreadActionMenu(input: {
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
             return;
           case "copy-path": {
-            const workspacePath = thread.worktreePath ?? projectCwd;
+            const workspacePath = threadWorkspaceCwd(thread, projectCwd);
             if (!workspacePath) {
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
                   title: "Path unavailable",
-                  description: "This thread does not have a workspace path to copy.",
+                  description: missingWorkspacePathReason(thread),
                 }),
               );
               return;

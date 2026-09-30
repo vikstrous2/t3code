@@ -68,6 +68,8 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
   gitCwd: string | null;
+  /** The thread's pool checkout is parked, so git actions show why they are unavailable. */
+  workspaceParked?: boolean;
   readonly onOpenPullRequest?: ((number: number) => void) | undefined;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
@@ -137,6 +139,7 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   rightPanelOpen,
   gitCwd,
+  workspaceParked = false,
   onOpenPullRequest,
   onNewThreadInProject,
   onOpenProjectSettings,
@@ -381,7 +384,7 @@ export const ChatHeader = memo(function ChatHeader({
           />
         </>
       )}
-      {activeProjectName && gitCwd && (
+      {activeProjectName && (gitCwd || workspaceParked) && (
         <>
           {actionsCollapsed && (activeProjectScripts || showOpenInPicker) && <MenuSeparator />}
           <GitActionsControl
@@ -502,7 +505,9 @@ export const ChatHeader = memo(function ChatHeader({
           <MenuTrigger
             className={
               actionsCollapsed &&
-              (activeProjectScripts || showOpenInPicker || (activeProjectName && gitCwd))
+              (activeProjectScripts ||
+                showOpenInPicker ||
+                (activeProjectName && (gitCwd || workspaceParked)))
                 ? undefined
                 : "hidden"
             }

@@ -41,6 +41,8 @@ export function ThreadCommandSubtitle(props: {
   environmentLabel?: string | null;
   branch: string | null;
   worktreePath: string | null;
+  /** Pooled threads are worktree threads even while parked without a path. */
+  pooled?: boolean;
   isCurrent: boolean;
   driverKind?: ProviderDriverKind | null;
   providerDisplayName?: string | null;
@@ -48,7 +50,8 @@ export function ThreadCommandSubtitle(props: {
   className?: string;
 }) {
   const variant = props.variant ?? THREAD_COMMAND_SUBTITLE_VARIANT;
-  const isWorktree = props.worktreePath != null && props.worktreePath.trim().length > 0;
+  const isWorktree =
+    props.pooled === true || (props.worktreePath != null && props.worktreePath.trim().length > 0);
   const showHarness =
     variant !== "favicon-workspace" && props.driverKind != null && props.providerDisplayName;
 

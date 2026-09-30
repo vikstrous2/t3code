@@ -54,6 +54,11 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  branchCarryOverWorkspace,
+  missingWorkspacePathReason,
+  threadWorkspaceCwd,
+} from "@t3tools/shared/threadWorkspace";
+import {
   parseScopedThreadKey,
   scopedProjectKey,
   scopedThreadKey,
@@ -2244,8 +2249,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const threadProject = memberProjectByScopedKey.get(
         scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
-      const threadWorkspacePath =
-        thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      const threadWorkspacePath = threadWorkspaceCwd(
+        thread,
+        threadProject?.workspaceRoot ?? project.workspaceRoot ?? null,
+      );
       const clicked = await api.contextMenu.show(
         [
           ...(thread.branch
@@ -2276,8 +2283,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         const result = await settlePromise(() =>
           handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
             branch: thread.branch,
-            worktreePath: thread.worktreePath,
-            envMode: thread.worktreePath ? "worktree" : "local",
+            ...branchCarryOverWorkspace(thread),
             startFromOrigin: false,
           }),
         );
@@ -2309,7 +2315,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             stackedThreadToast({
               type: "error",
               title: "Path unavailable",
-              description: "This thread does not have a workspace path to copy.",
+              description: missingWorkspacePathReason(thread),
             }),
           );
           return;

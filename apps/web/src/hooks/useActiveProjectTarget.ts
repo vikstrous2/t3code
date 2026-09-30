@@ -1,5 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { threadWorkspaceCwd } from "@t3tools/shared/threadWorkspace";
 
 import { useProjects } from "~/state/entities";
 
@@ -28,7 +29,8 @@ export function useActiveProjectTarget(): ActiveProjectTarget | null {
           candidate.environmentId === thread.environmentId && candidate.id === thread.projectId,
       )
     : null;
-  const cwd = thread?.worktreePath ?? project?.workspaceRoot;
+  // A parked pooled thread has no files on disk to pick or search.
+  const cwd = thread ? threadWorkspaceCwd(thread, project?.workspaceRoot) : undefined;
 
   if (!thread || !threadId || !project || !cwd) return null;
 

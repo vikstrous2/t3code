@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
+import { PARKED_WORKTREE_LABEL, type ThreadWorkspaceState } from "@t3tools/shared/threadWorkspace";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
   dedupeRemoteBranchesWithLocalMatches,
@@ -106,10 +107,14 @@ export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null):
 
 // A locked thread in worktree mode with no path is still creating its
 // worktree, so it reads as a new worktree rather than the project checkout.
+// A parked pooled thread has no path either, but its worktree exists in git.
 export function resolveLockedWorkspaceLabel(
   activeWorktreePath: string | null,
   effectiveEnvMode: EnvMode,
+  workspaceKind?: ThreadWorkspaceState["kind"] | null,
 ): string {
+  if (workspaceKind === "pooled-parked") return PARKED_WORKTREE_LABEL;
+  if (workspaceKind === "pooled-leased") return "Pooled worktree";
   if (activeWorktreePath) return "Worktree";
   return effectiveEnvMode === "worktree" ? resolveEnvModeLabel("worktree") : "Local checkout";
 }
@@ -170,15 +175,18 @@ export function resolveEffectiveEnvMode(input: {
    * from the start of that setup but gets its worktree path only at the end.
    */
   preparingWorktree?: boolean;
+  /** The thread uses the worktree pool; parked ones have no path but are still worktrees. */
+  pooled?: boolean;
 }): EnvMode {
-  const { activeWorktreePath, hasServerThread, draftThreadEnvMode, preparingWorktree } = input;
+  const { activeWorktreePath, hasServerThread, draftThreadEnvMode, preparingWorktree, pooled } =
+    input;
   if (!hasServerThread) {
     if (activeWorktreePath) {
       return "local";
     }
     return draftThreadEnvMode === "worktree" ? "worktree" : "local";
   }
-  return activeWorktreePath || preparingWorktree ? "worktree" : "local";
+  return activeWorktreePath || preparingWorktree || pooled ? "worktree" : "local";
 }
 
 export function resolveDraftEnvModeAfterBranchChange(input: {
@@ -263,12 +271,26 @@ export function resolveBranchSelectionTarget(input: {
   activeProjectCwd: string;
   activeWorktreePath: string | null;
   refName: Pick<VcsRef, "isDefault" | "worktreePath">;
+  /**
+   * The thread holds a worktree-pool checkout. It stays bound to that
+   * checkout: pointing it at another worktree (or the project root) would
+   * leave the pool tracking a tree the thread no longer uses.
+   */
+  pooled?: boolean;
 }): {
   checkoutCwd: string;
   nextWorktreePath: string | null;
   reuseExistingWorktree: boolean;
 } {
-  const { activeProjectCwd, activeWorktreePath, refName } = input;
+  const { activeProjectCwd, activeWorktreePath, refName, pooled } = input;
+
+  if (pooled && activeWorktreePath !== null) {
+    return {
+      checkoutCwd: activeWorktreePath,
+      nextWorktreePath: activeWorktreePath,
+      reuseExistingWorktree: false,
+    };
+  }
 
   if (refName.worktreePath) {
     return {

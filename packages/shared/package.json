@@ -127,6 +127,10 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
+    "./threadWorkspace": {
+      "types": "./src/threadWorkspace.ts",
+      "import": "./src/threadWorkspace.ts"
+    },
     "./projectSettings": {
       "types": "./src/projectSettings.ts",
       "import": "./src/projectSettings.ts"

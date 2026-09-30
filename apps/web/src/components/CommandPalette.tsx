@@ -1357,6 +1357,7 @@ function OpenCommandPaletteDialog(props: {
               }
               branch={thread.branch}
               worktreePath={thread.worktreePath}
+              pooled={thread.worktreePool != null}
               isCurrent={thread.id === activeThreadId}
               driverKind={providerEntry?.driverKind ?? null}
               providerDisplayName={

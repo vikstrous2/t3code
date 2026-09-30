@@ -3444,7 +3444,7 @@ function AssistantChangedFilesSectionInner({
             filePath,
             workspaceRoot: ctx.workspaceRoot,
             repositoryRoot:
-              thread?.worktreePath == null
+              thread?.worktreePath == null && thread?.worktreePool == null
                 ? activeProject?.repositoryIdentity?.rootPath
                 : undefined,
           },

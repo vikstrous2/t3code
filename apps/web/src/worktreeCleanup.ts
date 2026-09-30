@@ -1,3 +1,5 @@
+import { isPooledThread } from "@t3tools/shared/threadWorkspace";
+
 import type { ThreadShell } from "./types";
 
 function normalizeWorktreePath(path: string | null): string | null {
@@ -8,12 +10,17 @@ function normalizeWorktreePath(path: string | null): string | null {
   return trimmed;
 }
 
+/**
+ * The worktree only this thread uses, which deleting the thread may remove.
+ * Never a worktree-pool checkout: the pool owns those and reclaims the slot
+ * itself when the thread is deleted.
+ */
 export function getOrphanedWorktreePathForThread(
-  threads: ReadonlyArray<Pick<ThreadShell, "id" | "worktreePath">>,
+  threads: ReadonlyArray<Pick<ThreadShell, "id" | "worktreePath" | "worktreePool">>,
   threadId: ThreadShell["id"],
 ): string | null {
   const targetThread = threads.find((thread) => thread.id === threadId);
-  if (!targetThread) {
+  if (!targetThread || isPooledThread(targetThread)) {
     return null;
   }
 

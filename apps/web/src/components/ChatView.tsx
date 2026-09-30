@@ -77,6 +77,11 @@ import {
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
+  isPooledThread,
+  isThreadWorkspaceParked,
+  PARKED_WORKTREE_DESCRIPTION,
+} from "@t3tools/shared/threadWorkspace";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { truncate } from "@t3tools/shared/String";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
@@ -3623,13 +3628,17 @@ export default function ChatView(props: ChatViewProps) {
     panelAnimationDurationMs,
   );
 
-  const gitCwd = activeProject
-    ? projectScriptCwd({
-        project: { cwd: activeProject.workspaceRoot },
-        worktreePath: activeThread?.worktreePath ?? null,
-      })
-    : null;
-  const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
+  // A parked pooled thread has no checkout. Falling back to the project root
+  // would show another checkout's files and status as this thread's.
+  const activeThreadParked = activeThread != null && isThreadWorkspaceParked(activeThread);
+  const gitCwd =
+    activeProject && !activeThreadParked
+      ? projectScriptCwd({
+          project: { cwd: activeProject.workspaceRoot },
+          worktreePath: activeThread?.worktreePath ?? null,
+        })
+      : null;
+  const gitStatusCwd = activeThreadParked ? null : (activeThread?.worktreePath ?? gitCwd);
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
       ? null
@@ -3704,7 +3713,9 @@ export default function ChatView(props: ChatViewProps) {
   const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
-  const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const activeWorkspaceRoot = activeThreadParked
+    ? undefined
+    : (activeThreadWorktreePath ?? activeProjectCwd ?? undefined);
   useLayoutEffect(() => {
     if (
       threadDetailLoading ||
@@ -4188,6 +4199,18 @@ export default function ChatView(props: ChatViewProps) {
       },
     ) => {
       if (!activeThreadId || !activeProject || !activeThread) return;
+      // The server would lease a checkout for the terminal, but the script's
+      // T3CODE_WORKTREE_PATH is built here and would be missing.
+      if (options?.cwd === undefined && activeThreadParked) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Checkout parked",
+            description: `${PARKED_WORKTREE_DESCRIPTION} Send a message or open a terminal, then run the action.`,
+          }),
+        );
+        return;
+      }
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -4279,6 +4302,7 @@ export default function ChatView(props: ChatViewProps) {
       activeProject,
       activeThread,
       activeThreadId,
+      activeThreadParked,
       activeThreadRef,
       gitCwd,
       setTerminalOpen,
@@ -5827,12 +5851,14 @@ export default function ChatView(props: ChatViewProps) {
     hasServerThread: isServerThread,
     draftThreadEnvMode: isLocalDraftThread ? draftThread?.envMode : undefined,
     preparingWorktree: isPreparingWorktree,
+    pooled: isServerThread && activeThread != null && isPooledThread(activeThread),
   });
   const canOverrideServerThreadEnvMode = Boolean(
     isServerThread &&
     activeThread &&
     activeThread.messages.length === 0 &&
     activeThread.worktreePath === null &&
+    !isPooledThread(activeThread) &&
     !envLocked,
   );
   const envMode: DraftThreadEnvMode = canOverrideServerThreadEnvMode
@@ -7702,15 +7728,17 @@ export default function ChatView(props: ChatViewProps) {
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
-    const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
-        ? activeThreadBranch
-        : null;
+    // A pooled thread already has its worktree even when parked without a path.
+    const threadNeedsWorktree =
+      isFirstMessage &&
+      sendEnvMode === "worktree" &&
+      !activeThread.worktreePath &&
+      !isPooledThread(activeThread);
+    const baseBranchForWorktree = threadNeedsWorktree ? activeThreadBranch : null;
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
-    const shouldCreateWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
+    const shouldCreateWorktree = threadNeedsWorktree;
     if (shouldCreateWorktree && !activeThreadBranch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
@@ -9765,6 +9793,7 @@ export default function ChatView(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
+            workspaceParked={activeThreadParked}
             onNewThreadInProject={handleNewThreadInActiveProject}
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }

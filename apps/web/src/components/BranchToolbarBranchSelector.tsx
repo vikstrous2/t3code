@@ -1,5 +1,6 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
+import { isPooledThread, isThreadWorkspaceParked } from "@t3tools/shared/threadWorkspace";
 import { useRightPanelStore } from "../rightPanelStore";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -160,7 +161,11 @@ export function BranchToolbarBranchSelector({
     ? null
     : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
-  const branchCwd = activeWorktreePath ?? activeProjectCwd;
+  // A parked pooled thread has no checkout, so there is nothing to query or
+  // switch; the picker shows its branch read-only until it leases one again.
+  const pooled = !forceNewWorktree && serverThread !== null && isPooledThread(serverThread);
+  const parked = pooled && serverThread !== null && isThreadWorkspaceParked(serverThread);
+  const branchCwd = parked ? null : (activeWorktreePath ?? activeProjectCwd);
   const hasServerThread = serverThread !== null;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
@@ -168,6 +173,7 @@ export function BranchToolbarBranchSelector({
       activeWorktreePath,
       hasServerThread,
       draftThreadEnvMode: draftThread?.envMode,
+      pooled,
     });
 
   // ---------------------------------------------------------------------------
@@ -284,7 +290,7 @@ export function BranchToolbarBranchSelector({
   const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
   const prReference = parsePullRequestReference(trimmedBranchQuery);
   const isSelectingWorktreeBase =
-    effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
+    effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath && !pooled;
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
   const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
@@ -426,6 +432,7 @@ export function BranchToolbarBranchSelector({
       activeProjectCwd,
       activeWorktreePath,
       refName,
+      pooled,
     });
 
     if (selectionTarget.reuseExistingWorktree) {
@@ -523,6 +530,7 @@ export function BranchToolbarBranchSelector({
     if (
       effectiveEnvMode !== "worktree" ||
       activeWorktreePath ||
+      pooled ||
       activeThreadBranch ||
       !worktreeBaseBranchCandidate
     ) {
@@ -533,6 +541,7 @@ export function BranchToolbarBranchSelector({
     activeThreadBranch,
     activeWorktreePath,
     effectiveEnvMode,
+    pooled,
     setThreadBranch,
     worktreeBaseBranchCandidate,
   ]);
@@ -555,11 +564,11 @@ export function BranchToolbarBranchSelector({
     ref,
     () => ({
       open: () => {
-        if (isInitialBranchesLoadPending || isBranchActionPending) return;
+        if (parked || isInitialBranchesLoadPending || isBranchActionPending) return;
         handleOpenChange(true);
       },
     }),
-    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending],
+    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending, parked],
   );
 
   const [showTopBranchScrollFade, setShowTopBranchScrollFade] = useState(false);
@@ -642,13 +651,15 @@ export function BranchToolbarBranchSelector({
     void branchListRef.current?.scrollToOffset?.({ offset: 0, animated: false });
   }, [deferredTrimmedBranchQuery, isBranchMenuOpen]);
 
-  const triggerLabel = resolveBranchTriggerLabel({
-    activeWorktreePath,
-    effectiveEnvMode,
-    resolvedActiveBranch,
-    resolvedActiveBranchIsRemote,
-    startFromOrigin,
-  });
+  const triggerLabel = parked
+    ? (activeThreadBranch ?? "No branch")
+    : resolveBranchTriggerLabel({
+        activeWorktreePath,
+        effectiveEnvMode,
+        resolvedActiveBranch,
+        resolvedActiveBranchIsRemote,
+        startFromOrigin,
+      });
 
   // Branch status is the fallback when this thread has no linked pull requests.
   const branchPrBranch = resolveBranchToolbarPrBranch({
@@ -810,7 +821,7 @@ export function BranchToolbarBranchSelector({
             // No press-scale: the popup aligns live to this trigger, so a
             // momentary 0.97 shrink would drag the open popup ~3px sideways.
             className="min-w-0 max-w-full active:scale-100"
-            disabled={isInitialBranchesLoadPending || isBranchActionPending}
+            disabled={parked || isInitialBranchesLoadPending || isBranchActionPending}
           >
             <GitBranchIcon className="size-3 shrink-0 opacity-70" />
             <span

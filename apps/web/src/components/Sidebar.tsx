@@ -43,6 +43,12 @@ import {
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
+import {
+  branchCarryOverWorkspace,
+  missingWorkspacePathReason,
+  threadWorkspaceCwd,
+  threadWorkspaceState,
+} from "@t3tools/shared/threadWorkspace";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -1081,7 +1087,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [clearComposerContent, threadRef],
   );
 
-  const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
+  // Null for a parked pooled thread: the project root is another checkout.
+  const gitCwd = threadWorkspaceCwd(thread, props.project?.workspaceRoot ?? null);
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
     thread.linkedPullRequest,
@@ -1188,7 +1195,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
-    effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
+    effectiveEnvMode: threadWorkspaceState(thread).kind === "local" ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
     currentGitBranch: visibleGitStatus?.refName ?? null,
@@ -2051,7 +2058,8 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   );
   // Same details tooltip as the regular rows: a search hit is still a thread,
   // and the hover card is how you disambiguate identically-titled results.
-  const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
+  // Null for a parked pooled thread: the project root is another checkout.
+  const gitCwd = threadWorkspaceCwd(thread, props.project?.workspaceRoot ?? null);
   const gitStatus = useEnvironmentQuery(
     leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? vcsEnvironment.status({
@@ -2065,7 +2073,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
     gitStatus.data,
   );
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
-    effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
+    effectiveEnvMode: threadWorkspaceState(thread).kind === "local" ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
     currentGitBranch: visibleGitStatus?.refName ?? null,
@@ -4048,10 +4056,10 @@ export default function Sidebar() {
         }
         const thread = threadByKeyRef.current.get(threadKey);
         if (!thread) return;
-        const threadWorkspacePath =
-          thread.worktreePath ??
-          projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
-          null;
+        const threadWorkspacePath = threadWorkspaceCwd(
+          thread,
+          projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ?? null,
+        );
         // Un-settle pins the thread active until real activity clears the pin.
         // Environments without
         // the settlement capability get no lifecycle items at all.
@@ -4142,8 +4150,7 @@ export default function Sidebar() {
             const result = await settlePromise(() =>
               handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
                 branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
+                ...branchCarryOverWorkspace(thread),
                 startFromOrigin: false,
               }),
             );
@@ -4222,7 +4229,7 @@ export default function Sidebar() {
                 stackedThreadToast({
                   type: "error",
                   title: "Path unavailable",
-                  description: "This thread does not have a workspace path to copy.",
+                  description: missingWorkspacePathReason(thread),
                 }),
               );
               return;

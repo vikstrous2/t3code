@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { type ScopedThreadRef } from "@t3tools/contracts";
+import { isThreadWorkspaceParked } from "@t3tools/shared/threadWorkspace";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1735,7 +1736,35 @@ export default function GitActionsControl({
     </>
   );
 
-  if (!gitCwd) return null;
+  if (!gitCwd) {
+    if (activeServerThread === null || !isThreadWorkspaceParked(activeServerThread)) return null;
+    const parkedReason =
+      "Git actions need this thread's checkout, which is parked in the worktree pool. Send a message or open a terminal to lease it again.";
+    return presentation === "menu" ? (
+      <>
+        <MenuItem density="touch" disabled>
+          <SourceControlIcon className="size-4" />
+          <MenuItemLabel>Git actions</MenuItemLabel>
+        </MenuItem>
+        <p className="max-w-64 px-2 pb-2 text-xs text-muted-foreground">{parkedReason}</p>
+      </>
+    ) : (
+      <Popover>
+        <PopoverTrigger
+          openOnHover
+          render={<Button aria-disabled="true" size="xs" variant="outline" />}
+        >
+          <SourceControlIcon className="size-3.5" aria-hidden />
+          <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+            Git actions
+          </span>
+        </PopoverTrigger>
+        <PopoverPopup tooltipStyle side="bottom" align="start">
+          {parkedReason}
+        </PopoverPopup>
+      </Popover>
+    );
+  }
 
   return (
     <>

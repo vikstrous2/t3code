@@ -1233,6 +1233,15 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
             />
           ) : (
             <>
+              {terminal.status === "error" && terminal.error ? (
+                // Attach failures carry the server's reason, e.g. a full
+                // worktree pool when a parked thread cannot lease a checkout.
+                <View className="px-4 py-2">
+                  <Text selectable style={{ color: terminalTheme.foreground }}>
+                    {terminal.error}
+                  </Text>
+                </View>
+              ) : null}
               <View
                 style={{
                   flex: 1,

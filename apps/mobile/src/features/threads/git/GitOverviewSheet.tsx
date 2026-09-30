@@ -10,6 +10,10 @@ import {
 } from "@t3tools/shared/threadPullRequests";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
+  PARKED_WORKTREE_DESCRIPTION,
+  PARKED_WORKTREE_LABEL,
+} from "@t3tools/shared/threadWorkspace";
+import {
   CommonActions,
   StackActions,
   useNavigation,
@@ -63,7 +67,9 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const environmentId = EnvironmentId.make(props.route.params.environmentId);
   const threadId = ThreadId.make(props.route.params.threadId);
   const { selectedThread, selectedEnvironmentRuntime } = useThreadSelection();
-  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
+  const { selectedThreadCwd, selectedThreadWorktreePath, selectedThreadWorkspace } =
+    useSelectedThreadWorktree();
+  const parked = selectedThreadWorkspace.kind === "pooled-parked";
   const supportsLinkedPrSnapshots =
     selectedEnvironmentRuntime?.serverConfig?.environment.capabilities.threadPullRequests === true;
   const linkedPrChains = useMemo(
@@ -106,14 +112,16 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
     () =>
       menuItems.map((item) => ({
         item,
-        disabledReason: getGitActionDisabledReason({
-          item,
-          gitStatus: gitStatus.data,
-          isBusy: busy,
-          hasOriginRemote: hasPrimaryRemote,
-        }),
+        disabledReason: parked
+          ? PARKED_WORKTREE_DESCRIPTION
+          : getGitActionDisabledReason({
+              item,
+              gitStatus: gitStatus.data,
+              isBusy: busy,
+              hasOriginRemote: hasPrimaryRemote,
+            }),
       })),
-    [busy, gitStatus.data, hasPrimaryRemote, menuItems],
+    [busy, gitStatus.data, hasPrimaryRemote, menuItems, parked],
   );
 
   useEffect(() => {
@@ -261,7 +269,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
               icon={menuItemIconName(item.icon)}
               title={item.label}
               subtitle={disabledReason ?? rowStatusDetail(item)}
-              disabled={item.disabled}
+              disabled={item.disabled || parked}
               onPress={() => void onPressMenuItem(item)}
             />
           </View>
@@ -354,7 +362,11 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         </View>
       ) : null}
 
-      {currentWorktreePath ? <MetaCard label="Worktree" value={currentWorktreePath} /> : null}
+      {parked ? (
+        <MetaCard label="Worktree" value={PARKED_WORKTREE_LABEL} />
+      ) : currentWorktreePath ? (
+        <MetaCard label="Worktree" value={currentWorktreePath} />
+      ) : null}
     </ScrollView>
   );
 
