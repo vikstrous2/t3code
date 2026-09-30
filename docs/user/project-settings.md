@@ -62,6 +62,27 @@ itself, or **Skip** to leave them for a setup script. It resolves in the same or
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
+## Shared worktree pool
+
+Some build tools cache by checkout path. Bazel keys its output base on the workspace directory, so
+every new worktree starts a cold build. Set `"worktreePool": { "maxTrees": 8 }` in `t3.json` (or
+the matching project or environment setting) to have new worktree threads share a fixed set of
+checkouts instead of each getting its own.
+
+A pooled thread holds a checkout only while it needs one: while its agent session runs, while one
+of its terminals is open, and while its setup script runs. When all of those have stopped, for
+example after the idle agent session is stopped, T3 Code saves the thread's uncommitted changes,
+cleans the checkout and hands it to the next thread. Ignored files such as build outputs,
+`bazel-*` links and `node_modules` stay in the checkout, which is what keeps the next build warm.
+Sending a message or opening a terminal in the thread takes a checkout again, preferring the one it
+had last, and puts its branch and changes back. While a thread holds no checkout, its diffs still
+show but it has no files on disk.
+
+When all `maxTrees` checkouts are held, new sessions and terminals fail with an error saying the
+pool is full until another thread lets go of one. Staged changes come back unstaged. Threads
+checked out from a pull request still get their own worktree. Pool checkouts live under the T3
+home's `pool` directory, and storage cleanup never removes them.
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

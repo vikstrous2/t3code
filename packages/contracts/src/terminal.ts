@@ -368,8 +368,22 @@ export class TerminalResizeError extends Schema.TaggedError<TerminalResizeError>
   }
 }
 
+/** A pooled thread could not lease a worktree for the terminal to run in. */
+export class TerminalWorkspaceUnavailableError extends Schema.TaggedError<TerminalWorkspaceUnavailableError>()(
+  "TerminalWorkspaceUnavailableError",
+  {
+    threadId: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message() {
+    return this.detail;
+  }
+}
+
 export const TerminalError = Schema.Union([
   TerminalCwdError,
+  TerminalWorkspaceUnavailableError,
   TerminalHistoryError,
   TerminalSessionLookupError,
   TerminalProviderInstanceNotFoundError,

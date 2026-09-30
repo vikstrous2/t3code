@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
+import { ThreadEnvMode, WorktreePool, WorktreeSubmodules } from "./environment.ts";
 import { ProjectScriptIcon } from "./orchestration.ts";
 import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.ts";
 
@@ -93,6 +93,12 @@ export const T3ProjectFile = Schema.Struct({
         'How new worktrees populate git submodules: "recursive" (the default) initializes nested submodules too, "top-level" initializes only those declared by this repository, and "none" leaves every submodule empty for a setup script to handle. A project or environment setting in T3 Code overrides this.',
     }),
   ),
+  worktreePool: Schema.optionalKey(
+    WorktreePool.annotate({
+      description:
+        'Share a pool of worktrees across this repository\'s new worktree threads: { "maxTrees": 8 } keeps at most that many checkouts and hands them from thread to thread, so tools that cache by checkout path (such as Bazel) stay warm. A thread holds a checkout only while its agent session, a terminal or a setup script runs; its uncommitted changes are saved and restored in between. "off" (the default) gives every thread its own worktree. A project or environment setting in T3 Code overrides this.',
+    }),
+  ),
   scripts: Schema.optionalKey(
     Schema.Array(T3ProjectFileScript)
       .annotate({
@@ -119,6 +125,7 @@ export type T3ProjectFile = typeof T3ProjectFile.Type;
 export const PROJECT_FILE_BACKED_SETTINGS = {
   defaultThreadEnvMode: { field: "defaultThreadEnvMode", builtIn: "local" },
   worktreeSubmodules: { field: "worktreeSubmodules", builtIn: "recursive" },
+  worktreePool: { field: "worktreePool", builtIn: "off" },
 } as const satisfies {
   readonly [K in ProjectScopedServerSettingKey]?: {
     readonly field: {

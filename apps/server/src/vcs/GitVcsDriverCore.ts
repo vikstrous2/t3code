@@ -25,6 +25,7 @@ import {
   type ReviewDiffPreviewInput,
   type ReviewDiffFileStat,
   type ReviewDiffPreviewSource,
+  type VcsCreateWorktreeInput,
   type VcsRef,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
@@ -3062,47 +3063,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
-  const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
-    "createWorktree",
-  )(function* (input, options) {
-    const targetBranch = input.newRefName ?? input.refName;
-    const sanitizedBranch = targetBranch.replace(/\//g, "-");
-    const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", worktreePath, input.refName];
+  // What a fresh checkout needs after git put the files in place, whether
+  // `git worktree add` created it or a pool slot switched onto the branch.
+  const finishWorktreeCheckout = Effect.fn("finishWorktreeCheckout")(function* (
+    input: Pick<VcsCreateWorktreeInput, "cwd" | "newRefName" | "baseRefName">,
+    worktreePath: string,
+    options: GitVcsDriver.CreateWorktreeOptions | undefined,
+  ) {
     const progress = options?.progress;
-    const onCheckoutProgress = progress?.onCheckoutProgress;
-
-    const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    yield* executeGit(
-      "GitVcsDriver.createWorktree",
-      input.cwd,
-      ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
-      {
-        fallbackErrorDetail: "git worktree add failed",
-        timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
-        ...(onCheckoutProgress
-          ? {
-              // Git only prints checkout progress when stderr is a tty or the
-              // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
-              env: { GIT_PROGRESS_DELAY: "0", LC_ALL: "C" },
-              progress: {
-                onStderrLine: (line) => {
-                  const parsed = parseGitCheckoutProgressLine(line);
-                  return parsed ? onCheckoutProgress(parsed) : Effect.void;
-                },
-              },
-            }
-          : {}),
-      },
-    );
-
-    if (progress?.onWorktreeClaimed) {
-      yield* progress.onWorktreeClaimed(worktreePath);
-    }
-
     // `git worktree add` leaves submodules empty, so a repo that keeps agent
     // skills, tooling or source in one gets a worktree that is quietly missing
     // them. Best-effort: the objects are usually already in the parent's
@@ -3188,6 +3156,50 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         baseBranch,
       ]);
     }
+  });
+
+  const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
+    "createWorktree",
+  )(function* (input, options) {
+    const targetBranch = input.newRefName ?? input.refName;
+    const sanitizedBranch = targetBranch.replace(/\//g, "-");
+    const repoName = path.basename(input.cwd);
+    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    const args = input.newRefName
+      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+      : ["worktree", "add", worktreePath, input.refName];
+    const progress = options?.progress;
+    const onCheckoutProgress = progress?.onCheckoutProgress;
+
+    const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
+    yield* executeGit(
+      "GitVcsDriver.createWorktree",
+      input.cwd,
+      ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
+      {
+        fallbackErrorDetail: "git worktree add failed",
+        timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+        ...(onCheckoutProgress
+          ? {
+              // Git only prints checkout progress when stderr is a tty or the
+              // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
+              env: { GIT_PROGRESS_DELAY: "0", LC_ALL: "C" },
+              progress: {
+                onStderrLine: (line) => {
+                  const parsed = parseGitCheckoutProgressLine(line);
+                  return parsed ? onCheckoutProgress(parsed) : Effect.void;
+                },
+              },
+            }
+          : {}),
+      },
+    );
+
+    if (progress?.onWorktreeClaimed) {
+      yield* progress.onWorktreeClaimed(worktreePath);
+    }
+
+    yield* finishWorktreeCheckout(input, worktreePath, options);
 
     return {
       worktree: {
@@ -3195,6 +3207,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         refName: targetBranch,
       },
     };
+  });
+
+  const switchWorktree: GitVcsDriver.GitVcsDriver["Service"]["switchWorktree"] = Effect.fn(
+    "switchWorktree",
+  )(function* (input, options) {
+    const targetBranch = input.newRefName ?? input.refName;
+    const onCheckoutProgress = options?.progress?.onCheckoutProgress;
+    yield* executeGit(
+      "GitVcsDriver.switchWorktree",
+      input.path,
+      input.newRefName
+        ? ["switch", "--no-guess", "-c", input.newRefName, input.refName]
+        : ["switch", "--no-guess", input.refName],
+      {
+        fallbackErrorDetail: "git switch failed",
+        timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+        ...(onCheckoutProgress
+          ? {
+              env: { GIT_PROGRESS_DELAY: "0", LC_ALL: "C" },
+              progress: {
+                onStderrLine: (line) => {
+                  const parsed = parseGitCheckoutProgressLine(line);
+                  return parsed ? onCheckoutProgress(parsed) : Effect.void;
+                },
+              },
+            }
+          : {}),
+      },
+    );
+    yield* finishWorktreeCheckout(input, input.path, options);
+    return { worktree: { path: input.path, refName: targetBranch } };
   });
 
   const fetchPullRequestBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestBranch"] =
@@ -3684,6 +3727,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     listRefs,
     createWorktree: (input, options) =>
       withListRefsInvalidation(input.cwd, createWorktree(input, options)),
+    switchWorktree: (input, options) =>
+      withListRefsInvalidation(input.cwd, switchWorktree(input, options)),
     fetchPullRequestBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
     fetchPullRequestHeadCommit,

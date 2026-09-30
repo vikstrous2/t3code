@@ -790,6 +790,19 @@ export const ThreadPullRequestLink = Schema.Struct({
 });
 export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 
+/**
+ * Where a pooled thread's worktree stands. Pooled threads come from a
+ * project with the `worktreePool` setting on; for every other thread this is
+ * null or absent. "leased": the thread holds a pool checkout and
+ * `worktreePath` points at it. "parked": it holds none, `worktreePath` is
+ * null, and its uncommitted changes wait in git until its next session,
+ * terminal or setup script leases a checkout again (possibly another path).
+ */
+export const ThreadWorktreePool = Schema.Struct({
+  state: Schema.Literals(["leased", "parked"]),
+});
+export type ThreadWorktreePool = typeof ThreadWorktreePool.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -801,6 +814,8 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Optional so payloads from pre-pool servers still decode.
+  worktreePool: Schema.optional(Schema.NullOr(ThreadWorktreePool)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   // Optional so payloads from pre-link servers still decode.
   pullRequests: Schema.Array(ThreadPullRequestLink).pipe(
@@ -892,6 +907,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Optional so payloads from pre-pool servers still decode.
+  worktreePool: Schema.optional(Schema.NullOr(ThreadWorktreePool)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.Array(ThreadPullRequestLink).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -1658,8 +1675,20 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
   stack: Schema.NullOr(ThreadPullRequestStack),
 });
 
+// Server-only: the worktree pool leasing a checkout to a thread or parking
+// it. Projects as thread.meta-updated so older clients follow worktreePath.
+const ThreadWorktreePoolSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.worktree-pool.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  worktreePool: ThreadWorktreePool,
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.optional(TrimmedNonEmptyString),
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
+  ThreadWorktreePoolSetCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
   ThreadSessionSetCommand,
@@ -1865,6 +1894,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  worktreePool: Schema.optional(Schema.NullOr(ThreadWorktreePool)),
   // No longer produced; kept so persisted events from before
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),

@@ -40,6 +40,12 @@ export interface ServerDerivedPaths {
   readonly environmentThemesDir: string;
   readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
+  /**
+   * Checkouts the worktree pool hands between threads, one directory per
+   * repository. Deliberately outside `worktreesDir` so storage cleanup, which
+   * removes idle thread worktrees there, never sees a pool checkout.
+   */
+  readonly worktreePoolDir: string;
   readonly attachmentsDir: string;
   /** Screenshots the agent asks the collaborative browser to keep for the user. */
   readonly browserArtifactsDir: string;
@@ -150,6 +156,7 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentThemesDir: join(stateDir, "themes"),
     providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
+    worktreePoolDir: join(baseDir, "pool"),
     attachmentsDir,
     browserArtifactsDir: join(stateDir, "browser-artifacts"),
     logsDir,

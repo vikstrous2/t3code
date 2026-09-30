@@ -331,6 +331,15 @@ export class GitVcsDriver extends Context.Service<
       input: VcsCreateWorktreeInput,
       options?: CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    /**
+     * `createWorktree` for a checkout that already exists: switches the clean,
+     * detached worktree at `path` onto `refName` (or a new `newRefName` from
+     * it) and populates submodules the same way. Used by the worktree pool.
+     */
+    readonly switchWorktree: (
+      input: VcsCreateWorktreeInput & { readonly path: string },
+      options?: CreateWorktreeOptions,
+    ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     readonly fetchPullRequestBranch: (
       input: GitFetchPullRequestBranchInput,
     ) => Effect.Effect<void, GitCommandError>;

@@ -66,4 +66,12 @@ describe("T3ProjectFile", () => {
     expect(decode({ worktreeSubmodules: "top-level" }).worktreeSubmodules).toBe("top-level");
     expect(() => decode({ worktreeSubmodules: "shallow" })).toThrow();
   });
+
+  it("decodes worktreePool and rejects a cap that is not a positive integer", () => {
+    expect(decode({ worktreePool: { maxTrees: 8 } }).worktreePool).toEqual({ maxTrees: 8 });
+    expect(decode({ worktreePool: "off" }).worktreePool).toBe("off");
+    expect(() => decode({ worktreePool: { maxTrees: 0 } })).toThrow();
+    expect(() => decode({ worktreePool: { maxTrees: 2.5 } })).toThrow();
+    expect(() => decode({ worktreePool: true })).toThrow();
+  });
 });

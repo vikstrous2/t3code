@@ -64,6 +64,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
+import * as WorktreePool from "../../workspace/WorktreePool.ts";
 import { makeProviderServiceLive } from "./ProviderService.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
@@ -420,6 +421,7 @@ function makeProviderServiceLayer(
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly settingsLayer?: typeof defaultServerSettingsLayer;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
+    readonly worktreePool?: WorktreePool.WorktreePoolShape;
   } = {},
 ) {
   const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
@@ -453,6 +455,11 @@ function makeProviderServiceLayer(
         Layer.provide(directoryLayer),
         Layer.provide(input.settingsLayer ?? defaultServerSettingsLayer),
         Layer.provide(serverConfigTestLayer),
+        Layer.provide(
+          input.worktreePool === undefined
+            ? Layer.empty
+            : Layer.succeed(WorktreePool.WorktreePool, input.worktreePool),
+        ),
         Layer.provideMerge(input.analyticsLayer ?? AnalyticsService.layerTest),
         Layer.provide(
           Layer.succeed(
@@ -5356,6 +5363,45 @@ chatGptTelemetry.layer("ChatGPT connector turn analytics", (it) => {
         subscriptionSharing: true,
         errorType: "ProviderAdapterSessionNotFoundError",
       });
+    }),
+  );
+});
+
+// The pooled thread's binding remembers the checkout it last held; the pool
+// hands out another one.
+const pooledThreadId = asThreadId("thread-pooled");
+const pooledRouting = makeProviderServiceLayer({
+  worktreePool: {
+    settingFor: () => Effect.succeed({ maxTrees: 2 }),
+    lease: () => Effect.succeed(null),
+    withThreadWorkspace: (threadId, use) =>
+      use(threadId === pooledThreadId ? fixtureCwd("pool-slot-2") : null),
+    releaseIfIdle: () => Effect.void,
+    start: () => Effect.void,
+    drain: Effect.void,
+  },
+});
+
+pooledRouting.layer("ProviderServiceLive worktree pool recovery", (it) => {
+  it.effect("resumes a pooled thread in the checkout it leases, not the one it last held", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      yield* provider.startSession(pooledThreadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: pooledThreadId,
+        cwd: fixtureCwd("pool-slot-1"),
+        runtimeMode: "full-access",
+      });
+      yield* pooledRouting.codex.stopAll();
+      pooledRouting.codex.startSession.mockClear();
+
+      yield* provider.sendTurn({ threadId: pooledThreadId, input: "resume", attachments: [] });
+
+      const resumed = pooledRouting.codex.startSession.mock.calls[0]?.[0] as
+        | { readonly cwd?: string }
+        | undefined;
+      assert.equal(resumed?.cwd, fixtureCwd("pool-slot-2"));
     }),
   );
 });

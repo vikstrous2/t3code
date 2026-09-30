@@ -1263,6 +1263,42 @@ describe("CheckpointReactor", () => {
     expect(thread?.branch).toBe("t3code/renamed-by-agent");
   });
 
+  it("does not follow the checkout a parked pooled thread gave back", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      threadBranch: "t3code/original-branch",
+      localStatusRefName: "t3code/someone-elses-branch",
+    });
+    // The session binding still names the pool checkout, which another
+    // thread may have switched to its own branch by now.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.worktree-pool.set",
+        commandId: CommandId.make("cmd-pool-park"),
+        threadId: ThreadId.make("thread-1"),
+        worktreePool: { state: "parked" },
+        worktreePath: null,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("evt-turn-completed-parked-drift"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-parked-drift"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    const snapshot = await harness.readModel();
+    const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.branch).toBe("t3code/original-branch");
+    expect(thread?.worktreePool).toEqual({ state: "parked" });
+  });
+
   it("follows a checkout from a saved placeholder branch and refreshes its pull request", async () => {
     const pullRequestRefreshCalls: string[] = [];
     const harness = await createHarness({

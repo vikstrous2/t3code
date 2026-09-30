@@ -65,6 +65,21 @@ export type ThreadEnvMode = typeof ThreadEnvMode.Type;
  */
 export const WorktreeSubmodules = Schema.Literals(["recursive", "top-level", "none"]);
 export type WorktreeSubmodules = typeof WorktreeSubmodules.Type;
+
+/**
+ * Whether new worktree threads share a per-repository pool of checkouts.
+ * "off" gives every thread its own `git worktree add`; `maxTrees` caps how
+ * many pooled checkouts one repository keeps. A pooled thread holds a
+ * checkout only while a session, terminal or setup script needs one, so
+ * build caches keyed on the checkout path stay warm across threads.
+ */
+export const WorktreePool = Schema.Union([
+  Schema.Literal("off"),
+  Schema.Struct({
+    maxTrees: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 })),
+  }),
+]);
+export type WorktreePool = typeof WorktreePool.Type;
 export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
 
 /** How a server can replace itself with another version when asked over RPC.

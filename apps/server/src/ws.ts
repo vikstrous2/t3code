@@ -74,6 +74,7 @@ import {
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
+  TerminalWorkspaceUnavailableError,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
@@ -124,6 +125,7 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import { WorktreePool } from "./workspace/WorktreePool.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -559,6 +561,8 @@ const makeWsRpcLayer = (
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
+      const worktreePool = yield* WorktreePool;
+      const pathService = yield* Path.Path;
       const previewManager = yield* PreviewManager.PreviewManager;
       const deviceService = yield* DeviceService.DeviceService;
       const deviceHostContext =
@@ -1086,6 +1090,9 @@ const makeWsRpcLayer = (
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+          // Set once the worktree pool leased the checkout. A cancel must not
+          // remove a pool checkout; deleting the thread returns it instead.
+          let pooledWorktree = false;
           // The setup script's terminal, once started. Cancel closes only this
           // one so terminals the user opened meanwhile survive.
           let setupTerminalId: string | null = null;
@@ -1498,70 +1505,100 @@ const makeWsRpcLayer = (
                 threadId,
                 projectId: targetProjectId ?? null,
               });
-              const worktree = yield* gitWorkflow.createWorktree(
-                {
-                  cwd: prepareWorktree.projectCwd,
-                  refName: worktreeBaseRef,
-                  newRefName: prepareWorktree.branch,
-                  baseRefName: prepareWorktree.baseBranch,
-                  path: null,
+              const progress: GitVcsDriver.CreateWorktreeProgress = {
+                // Git has registered the directory at this point, so a
+                // cancel during the submodule step can still remove it.
+                onWorktreeClaimed: (path) =>
+                  Effect.sync(() => {
+                    targetWorktreePath = path;
+                  }),
+                onCheckoutProgress: ({ percent, completed, total }) => {
+                  checkoutTotal = total;
+                  return worktreeSetupTracker.stage(threadId, "checkout", {
+                    percent,
+                    detail: `${completed.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} files`,
+                  });
                 },
-                {
-                  submodules,
-                  progress: {
-                    // Git has registered the directory at this point, so a
-                    // cancel during the submodule step can still remove it.
-                    onWorktreeClaimed: (path) =>
-                      Effect.sync(() => {
-                        targetWorktreePath = path;
-                      }),
-                    onCheckoutProgress: ({ percent, completed, total }) => {
-                      checkoutTotal = total;
-                      return worktreeSetupTracker.stage(threadId, "checkout", {
-                        percent,
-                        detail: `${completed.toLocaleString("en-US")} / ${total.toLocaleString("en-US")} files`,
+                onSubmodulesStarted: () =>
+                  worktreeSetupTracker
+                    .stageStatus(
+                      threadId,
+                      "checkout",
+                      "done",
+                      checkoutTotal === null
+                        ? null
+                        : `${checkoutTotal.toLocaleString("en-US")} files`,
+                    )
+                    .pipe(
+                      Effect.andThen(
+                        worktreeSetupTracker.stageStatus(threadId, "submodules", "running"),
+                      ),
+                    ),
+                onSubmodulesDisabled: ({ source }) =>
+                  worktreeSetupTracker.stageStatus(
+                    threadId,
+                    "submodules",
+                    "skipped",
+                    `disabled in ${source}`,
+                  ),
+                onSubmoduleLine: (line) => {
+                  const submodulePath = /Submodule path '([^']+)'/.exec(line)?.[1];
+                  return submodulePath === undefined
+                    ? Effect.void
+                    : worktreeSetupTracker.stage(threadId, "submodules", {
+                        detail: submodulePath,
                       });
-                    },
-                    onSubmodulesStarted: () =>
-                      worktreeSetupTracker
-                        .stageStatus(
-                          threadId,
-                          "checkout",
-                          "done",
-                          checkoutTotal === null
-                            ? null
-                            : `${checkoutTotal.toLocaleString("en-US")} files`,
-                        )
-                        .pipe(
-                          Effect.andThen(
-                            worktreeSetupTracker.stageStatus(threadId, "submodules", "running"),
-                          ),
-                        ),
-                    onSubmodulesDisabled: ({ source }) =>
-                      worktreeSetupTracker.stageStatus(
-                        threadId,
-                        "submodules",
-                        "skipped",
-                        `disabled in ${source}`,
-                      ),
-                    onSubmoduleLine: (line) => {
-                      const submodulePath = /Submodule path '([^']+)'/.exec(line)?.[1];
-                      return submodulePath === undefined
-                        ? Effect.void
-                        : worktreeSetupTracker.stage(threadId, "submodules", {
-                            detail: submodulePath,
-                          });
-                    },
-                    onSubmodulesFinished: ({ ok, detail }) =>
-                      worktreeSetupTracker.stageStatus(
-                        threadId,
-                        "submodules",
-                        ok ? "done" : "warning",
-                        ok ? undefined : (detail ?? "submodule checkout failed"),
-                      ),
-                  },
                 },
-              );
+                onSubmodulesFinished: ({ ok, detail }) =>
+                  worktreeSetupTracker.stageStatus(
+                    threadId,
+                    "submodules",
+                    ok ? "done" : "warning",
+                    ok ? undefined : (detail ?? "submodule checkout failed"),
+                  ),
+              };
+              // A pooled project hands out a pool checkout instead of adding a
+              // worktree. The lease stays pinned until this bootstrap ends, so
+              // the setup script and turn start find it still held.
+              const poolProjectId =
+                targetProjectId ??
+                (yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+                  Effect.map((thread) => Option.getOrNull(thread)?.projectId ?? null),
+                  Effect.orElseSucceed(() => null),
+                ));
+              const pooledBranch =
+                poolProjectId !== null && (yield* worktreePool.settingFor(poolProjectId)) !== "off"
+                  ? prepareWorktree.branch
+                  : undefined;
+              const worktree =
+                pooledBranch !== undefined
+                  ? yield* worktreePool
+                      .lease(threadId, {
+                        newBranch: {
+                          name: pooledBranch,
+                          startPoint: worktreeBaseRef,
+                          baseBranch: prepareWorktree.baseBranch,
+                        },
+                        progress,
+                      })
+                      .pipe(
+                        Effect.flatMap((path) =>
+                          path === null
+                            ? Effect.die(new Error("pooled bootstrap leased no worktree"))
+                            : Effect.succeed({ worktree: { path, refName: pooledBranch } }),
+                        ),
+                        Effect.tap(() => Effect.sync(() => void (pooledWorktree = true))),
+                      )
+                  : yield* gitWorkflow.createWorktree(
+                      {
+                        cwd: prepareWorktree.projectCwd,
+                        refName: worktreeBaseRef,
+                        newRefName: prepareWorktree.branch,
+                        baseRefName: prepareWorktree.baseBranch,
+                        path: null,
+                      },
+                      { submodules, progress },
+                    );
               const checkoutEndedAt = yield* nowIso;
               yield* worktreeSetupTracker.update(threadId, (snapshot) => ({
                 ...snapshot,
@@ -1586,13 +1623,16 @@ const makeWsRpcLayer = (
                 }),
               }));
               targetWorktreePath = worktree.worktree.path;
-              yield* dispatchFromClient({
-                type: "thread.meta.update",
-                commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
-                threadId,
-                branch: worktree.worktree.refName,
-                worktreePath: targetWorktreePath,
-              });
+              // The pool already recorded its lease on the thread.
+              if (!pooledWorktree) {
+                yield* dispatchFromClient({
+                  type: "thread.meta.update",
+                  commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
+                  threadId,
+                  branch: worktree.worktree.refName,
+                  worktreePath: targetWorktreePath,
+                });
+              }
               yield* refreshGitStatus(targetWorktreePath);
             }
 
@@ -1672,7 +1712,8 @@ const makeWsRpcLayer = (
               }),
             );
 
-          const settledBootstrapProgram = bootstrapProgram.pipe(
+          // Scoped so a pooled checkout's lease is held until the program ends.
+          const settledBootstrapProgram = Effect.scoped(bootstrapProgram).pipe(
             Effect.interruptible,
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
@@ -1690,8 +1731,11 @@ const makeWsRpcLayer = (
                       deleteHistory: true,
                     })
                   : Effect.void;
-                const removeCreatedWorktree =
-                  tracked && targetWorktreePath && bootstrap?.prepareWorktree
+                // A pool checkout is not removed: deleting the thread below
+                // cleans it and returns it to the pool.
+                const removeCreatedWorktree = pooledWorktree
+                  ? closeSetupTerminal.pipe(Effect.ignoreCause({ log: true }))
+                  : tracked && targetWorktreePath && bootstrap?.prepareWorktree
                     ? closeSetupTerminal.pipe(
                         Effect.ignoreCause({ log: true }),
                         Effect.andThen(
@@ -1868,6 +1912,41 @@ const makeWsRpcLayer = (
             reasoningMessages: true,
           };
         });
+
+      // A pooled thread's terminals run in the checkout it leases (leasing one
+      // for a parked thread). The client's cwd can name the project root or
+      // a slot the thread no longer holds, so only a path inside the lease
+      // is kept.
+      const isInsideDirectory = (directory: string, candidate: string) => {
+        const relative = pathService.relative(directory, candidate);
+        return relative === "" || (!relative.startsWith("..") && !pathService.isAbsolute(relative));
+      };
+      const inThreadTerminalWorkspace = <
+        I extends { readonly threadId: string; readonly cwd: string },
+        A,
+      >(
+        input: I,
+        run: (input: I) => Effect.Effect<A, TerminalError>,
+      ) =>
+        worktreePool
+          .withThreadWorkspace(ThreadId.make(input.threadId), (leased) => {
+            if (leased === null) return run(input);
+            return run({
+              ...input,
+              cwd: isInsideDirectory(leased, input.cwd) ? input.cwd : leased,
+              worktreePath: leased,
+            });
+          })
+          .pipe(
+            Effect.catchTag("WorktreePoolError", (error) =>
+              Effect.fail(
+                new TerminalWorkspaceUnavailableError({
+                  threadId: input.threadId,
+                  detail: error.message,
+                }),
+              ),
+            ),
+          );
 
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
@@ -3396,7 +3475,16 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsRemoveWorktree,
-            gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            // Pool checkouts are shared by threads and outlive each of them;
+            // deleting the thread is what returns one. Removing it would
+            // strand the pool's record of it and the build cache it keeps.
+            isInsideDirectory(config.worktreePoolDir, input.path)
+              ? Effect.logInfo("ignored a request to remove a worktree pool checkout", {
+                  path: input.path,
+                })
+              : gitWorkflow
+                  .removeWorktree(input)
+                  .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsCreateRef]: (input) =>
@@ -3430,15 +3518,24 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "review" },
           ),
         [WS_METHODS.terminalOpen]: (input) =>
-          observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
-            "rpc.aggregate": "terminal",
-          }),
+          observeRpcEffect(
+            WS_METHODS.terminalOpen,
+            inThreadTerminalWorkspace(input, terminalManager.open),
+            { "rpc.aggregate": "terminal" },
+          ),
         [WS_METHODS.terminalAttach]: (input) =>
           observeRpcStream(
             WS_METHODS.terminalAttach,
             Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
               Effect.acquireRelease(
-                terminalManager.attachStream(input, (event) => Queue.offer(queue, event)),
+                // Only an attach that names a cwd can start a shell.
+                input.cwd === undefined
+                  ? terminalManager.attachStream(input, (event) => Queue.offer(queue, event))
+                  : inThreadTerminalWorkspace({ ...input, cwd: input.cwd }, (retargeted) =>
+                      terminalManager.attachStream(retargeted, (event) =>
+                        Queue.offer(queue, event),
+                      ),
+                    ),
                 (unsubscribe) => Effect.sync(unsubscribe),
               ),
             ),
@@ -3457,9 +3554,11 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "terminal",
           }),
         [WS_METHODS.terminalRestart]: (input) =>
-          observeRpcEffect(WS_METHODS.terminalRestart, terminalManager.restart(input), {
-            "rpc.aggregate": "terminal",
-          }),
+          observeRpcEffect(
+            WS_METHODS.terminalRestart,
+            inThreadTerminalWorkspace(input, terminalManager.restart),
+            { "rpc.aggregate": "terminal" },
+          ),
         [WS_METHODS.terminalClose]: (input) =>
           observeRpcEffect(WS_METHODS.terminalClose, terminalManager.close(input), {
             "rpc.aggregate": "terminal",

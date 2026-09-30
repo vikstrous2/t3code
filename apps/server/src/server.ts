@@ -45,6 +45,8 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
+import * as WorktreePoolSlots from "./persistence/WorktreePoolSlots.ts";
+import * as WorktreePool from "./workspace/WorktreePool.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
@@ -468,11 +470,23 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+// Below ProviderService so session recovery can lease a pooled thread's
+// checkout, above orchestration so leases can be recorded on the thread.
+const WorktreePoolLayerLive = WorktreePool.layer.pipe(
+  Layer.provide(WorktreePoolSlots.layer),
+  Layer.provide(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
+  Layer.provide(GitVcsDriver.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(ProviderSessionDirectoryLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
   Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(WorktreePoolLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 

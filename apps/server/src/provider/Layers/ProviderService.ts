@@ -79,6 +79,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
+import { WorktreePool } from "../../workspace/WorktreePool.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
@@ -487,6 +488,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const worktreePool = yield* WorktreePool;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const projectionQuery = yield* Effect.serviceOption(
     ProjectionSnapshotQuery.ProjectionSnapshotQuery,
@@ -1296,17 +1298,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
-      const resumed = yield* adapter
-        .startSession({
-          threadId: input.binding.threadId,
-          provider: input.binding.provider,
-          providerInstanceId: bindingInstanceId,
-          ...(persistedCwd ? { cwd: persistedCwd } : {}),
-          ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
-          ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
-          runtimeMode: input.binding.runtimeMode ?? "full-access",
+      // A pooled thread's persisted cwd is the pool checkout it last held,
+      // which another thread may hold now. Resume in the one it leases.
+      const resumed = yield* worktreePool
+        .withThreadWorkspace(input.binding.threadId, (poolCwd) => {
+          const cwd = poolCwd ?? persistedCwd;
+          return adapter.startSession({
+            threadId: input.binding.threadId,
+            provider: input.binding.provider,
+            providerInstanceId: bindingInstanceId,
+            ...(cwd ? { cwd } : {}),
+            ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+            ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
+            runtimeMode: input.binding.runtimeMode ?? "full-access",
+          });
         })
-        .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+        .pipe(
+          Effect.catchTag("WorktreePoolError", (error) =>
+            Effect.fail(toValidationError(input.operation, error.message, error)),
+          ),
+          Effect.onError(() => clearMcpSession(input.binding.threadId)),
+        );
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
         return yield* toValidationError(
@@ -2127,6 +2139,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* analytics.record("provider.session.stopped", {
           provider: routed.adapter.provider,
         });
+        // Every stop (reaper, user, settle, delete) lands here, including
+        // ones whose exit event never reaches the thread.
+        yield* worktreePool.releaseIfIdle(input.threadId);
       }).pipe(
         withMetrics({
           counter: providerSessionsTotal,

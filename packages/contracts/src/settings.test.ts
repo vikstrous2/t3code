@@ -853,6 +853,16 @@ describe("ServerSettings worktree defaults", () => {
     expect(decodeServerSettings({ worktreeSubmodules: "shallow" }).worktreeSubmodules).toBeNull();
     expect(decodeServerSettingsPatch({ worktreeSubmodules: null }).worktreeSubmodules).toBeNull();
   });
+
+  it("defaults the worktree pool to inherit and tolerates values it cannot read", () => {
+    expect(decodeServerSettings({}).worktreePool).toBeNull();
+    expect(decodeServerSettings({ worktreePool: { maxTrees: 4 } }).worktreePool).toEqual({
+      maxTrees: 4,
+    });
+    expect(decodeServerSettings({ worktreePool: "off" }).worktreePool).toBe("off");
+    expect(decodeServerSettings({ worktreePool: { maxTrees: -1 } }).worktreePool).toBeNull();
+    expect(decodeServerSettingsPatch({ worktreePool: null }).worktreePool).toBeNull();
+  });
 });
 
 describe("ServerSettings.sourceControlWritingStyle", () => {

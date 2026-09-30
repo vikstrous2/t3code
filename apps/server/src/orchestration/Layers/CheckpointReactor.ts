@@ -38,6 +38,7 @@ import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
+import { WorktreePool } from "../../workspace/WorktreePool.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
 
@@ -87,6 +88,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
+  const worktreePool = yield* WorktreePool;
   const receiptBus = yield* RuntimeReceiptBus;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -209,10 +211,24 @@ const make = Effect.gen(function* () {
   // a git repository.
   const resolveCheckpointCwd = Effect.fn("resolveCheckpointCwd")(function* (input: {
     readonly threadId: ThreadId;
-    readonly thread: { readonly projectId: ProjectId; readonly worktreePath: string | null };
+    readonly thread: {
+      readonly projectId: ProjectId;
+      readonly worktreePath: string | null;
+      readonly worktreePool?: { readonly state: "leased" | "parked" } | null | undefined;
+    };
     readonly projects: ReadonlyArray<{ readonly id: ProjectId; readonly workspaceRoot: string }>;
     readonly preferSessionRuntime: boolean;
   }): Effect.fn.Return<string | undefined, CheckpointStoreError> {
+    // A pooled thread's files are only in the checkout it leases now: the
+    // session's recorded cwd can be a slot another thread holds, and the
+    // project root is somebody else's checkout. Parked means no files.
+    if (input.thread.worktreePool != null) {
+      const leased =
+        input.thread.worktreePool.state === "leased" ? input.thread.worktreePath : null;
+      return leased !== null && (yield* checkpointStore.isGitRepository(leased))
+        ? leased
+        : undefined;
+    }
     const fromSession = yield* resolveSessionRuntimeForThread(input.threadId);
     const fromThread = resolveThreadWorkspaceCwd({
       thread: input.thread,
@@ -917,18 +933,21 @@ const make = Effect.gen(function* () {
     }
 
     if (event.type === "thread.checkpoint-revert-requested") {
-      yield* handleRevertRequested(event).pipe(
-        Effect.catch((error) =>
-          Effect.flatMap(nowIso, (createdAt) =>
-            appendRevertFailureActivity({
-              threadId: event.payload.threadId,
-              turnCount: event.payload.turnCount,
-              detail: error.message,
-              createdAt,
-            }),
+      // A parked pooled thread needs a checkout to restore files into.
+      yield* worktreePool
+        .withThreadWorkspace(event.payload.threadId, () => handleRevertRequested(event))
+        .pipe(
+          Effect.catch((error) =>
+            Effect.flatMap(nowIso, (createdAt) =>
+              appendRevertFailureActivity({
+                threadId: event.payload.threadId,
+                turnCount: event.payload.turnCount,
+                detail: error.message,
+                createdAt,
+              }),
+            ),
           ),
-        ),
-      );
+        );
       return;
     }
   });

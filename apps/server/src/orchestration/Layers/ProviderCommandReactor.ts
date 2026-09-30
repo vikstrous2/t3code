@@ -66,6 +66,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
+import { WorktreePool, type WorktreePoolError } from "../../workspace/WorktreePool.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -224,6 +225,7 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const worktreePool = yield* WorktreePool;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -482,9 +484,11 @@ const make = Effect.gen(function* () {
     readonly projectId: ProjectId;
     readonly branch: string | null;
     readonly worktreePath: string | null;
+    readonly worktreePool?: unknown;
   }) {
     const { worktreePath, branch } = thread;
-    if (!worktreePath || !branch) {
+    // The pool replaces a vanished checkout of its own when it leases one.
+    if (!worktreePath || !branch || thread.worktreePool != null) {
       return;
     }
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
@@ -704,6 +708,16 @@ const make = Effect.gen(function* () {
           detail: `Thread '${threadId}' cannot switch from instance '${currentInstanceId}' to '${desiredInstanceId}' because their provider resume state is incompatible.`,
         });
       }
+    }
+    // Callers lease a pooled thread's checkout first. A parked thread has
+    // none, and the project root fallback would put its session in the
+    // user's own checkout.
+    if (thread.worktreePool?.state === "parked") {
+      return yield* new ProviderAdapterRequestError({
+        provider: preferredProvider,
+        method: "thread.turn.start",
+        detail: `Thread '${threadId}' has no worktree leased from the pool.`,
+      });
     }
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({
@@ -1817,16 +1831,48 @@ const make = Effect.gen(function* () {
           event.occurredAt,
           cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {},
         );
-        yield* thread.worktreePath
-          ? withWorkspaceLease(path.resolve(thread.worktreePath), resume)
-          : resume;
+        yield* worktreePool.withThreadWorkspace(event.payload.threadId, (poolCwd) => {
+          const cwd = poolCwd ?? thread.worktreePath;
+          return cwd ? withWorkspaceLease(path.resolve(cwd), resume) : resume;
+        });
         return;
       }
       case "thread.turn-start-requested": {
         const thread = yield* resolveThreadShell(event.payload.threadId);
-        yield* thread?.worktreePath
-          ? withWorkspaceLease(path.resolve(thread.worktreePath), processTurnStartRequested(event))
-          : processTurnStartRequested(event);
+        yield* worktreePool
+          .withThreadWorkspace(event.payload.threadId, (poolCwd) => {
+            const cwd = poolCwd ?? thread?.worktreePath;
+            const run = cwd
+              ? withWorkspaceLease(path.resolve(cwd), processTurnStartRequested(event))
+              : processTurnStartRequested(event);
+            // A fresh lease moved the thread; clients need its status there.
+            return poolCwd !== null && poolCwd !== thread?.worktreePath
+              ? vcsStatusBroadcaster
+                  .refreshStatus(poolCwd)
+                  .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.andThen(run))
+              : run;
+          })
+          .pipe(
+            Effect.catchTag("WorktreePoolError", (error: WorktreePoolError) =>
+              setThreadSessionErrorOnTurnStartFailure({
+                threadId: event.payload.threadId,
+                detail: error.message,
+                createdAt: event.payload.createdAt,
+              }).pipe(
+                Effect.andThen(
+                  appendProviderFailureActivity({
+                    threadId: event.payload.threadId,
+                    kind: "provider.turn.start.failed",
+                    summary: "Provider turn start failed",
+                    detail: error.message,
+                    turnId: null,
+                    createdAt: event.payload.createdAt,
+                    requestId: event.payload.messageId,
+                  }),
+                ),
+              ),
+            ),
+          );
         return;
       }
       case "thread.turn-interrupt-requested":

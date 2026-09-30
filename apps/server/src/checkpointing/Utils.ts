@@ -9,6 +9,14 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+/**
+ * Where the worktree pool keeps a parked thread's uncommitted changes. Lives
+ * in the repository's shared ref store so any pool checkout can restore it.
+ */
+export function worktreePoolParkedRefForThread(threadId: ThreadId): CheckpointRef {
+  return CheckpointRef.make(`refs/t3/pool-parked/${Encoding.encodeBase64Url(threadId)}`);
+}
+
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;

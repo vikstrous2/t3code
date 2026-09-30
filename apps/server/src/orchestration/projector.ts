@@ -650,6 +650,7 @@ export function projectEvent(
                 : {}),
               ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
               ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+              ...(payload.worktreePool !== undefined ? { worktreePool: payload.worktreePool } : {}),
               ...(payload.activeOrderKey !== undefined
                 ? { activeOrderKey: payload.activeOrderKey }
                 : {}),
